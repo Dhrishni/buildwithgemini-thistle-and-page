@@ -142,10 +142,21 @@ def _extract_parts(parts: list) -> list[dict]:
         if text_val:
             out.append({"kind": "text", "text": text_val})
         elif getattr(root, "data", None) is not None:
+            data_val = root.data
             meta = getattr(root, "metadata", None) or {}
             mime = meta.get("mimeType") if isinstance(meta, dict) else getattr(meta, "mime_type", None)
+            
+            # 1. Direct A2UI data part
             if mime == _A2UI_MIME:
-                out.append({"kind": "a2ui", "data": root.data})
+                out.append({"kind": "a2ui", "data": data_val})
+            # 2. Nested A2UI data part (wrapped inside dict: {'data': {...}, 'metadata': {'mimeType': '...'}})
+            elif isinstance(data_val, dict):
+                inner_meta = data_val.get("metadata") or {}
+                inner_mime = inner_meta.get("mimeType") if isinstance(inner_meta, dict) else getattr(inner_meta, "mime_type", None)
+                if inner_mime == _A2UI_MIME and "data" in data_val:
+                    out.append({"kind": "a2ui", "data": data_val["data"]})
+                elif "surfaceUpdate" in data_val or "beginRendering" in data_val:
+                    out.append({"kind": "a2ui", "data": data_val})
         elif FilePart and isinstance(root, FilePart):
             uri = getattr(getattr(root, "file", None), "uri", None)
             if uri:
