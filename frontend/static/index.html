@@ -42,6 +42,8 @@
   .a2text.a2-caption { font-size:.85rem; color:#6b5f79; }
   .a2divider { border:none; border-top:1px solid var(--border); margin:.4rem 0; width:100%; }
   .a2img { max-width:100%; border-radius:8px; display:block; }
+  .a2btn { display:inline-flex; align-items:center; justify-content:center; gap:0.4rem; padding:0.45rem 0.9rem; font-size:0.88rem; font-weight:600; color:#fff; background:var(--accent); border:none; border-radius:6px; cursor:pointer; margin-top:0.35rem; transition:background 0.15s ease; box-shadow:0 1px 3px rgba(107,63,160,0.15); width:fit-content; }
+  .a2btn:hover { background:var(--accent-hover); }
   .material-symbols-outlined { font-family:'Material Symbols Outlined'; font-size:1.25rem; line-height:1; vertical-align:middle; color:var(--accent); }
 </style>
 </head>
@@ -134,6 +136,23 @@ function buildNode(id, comps, seen) {
     }
     case "Divider":
       return el("hr", "a2divider");
+    case "Button": {
+      const btn = el("button", "a2btn");
+      btn.type = "button";
+      const label = boundStr(props.label || props.text || (props.action && props.action.label) || "Action");
+      btn.textContent = label;
+      const childNodes = kids();
+      if (childNodes.length > 0) {
+        btn.textContent = "";
+        childNodes.forEach(n => btn.appendChild(n));
+      }
+      const actionText = boundStr(props.action || props.onClick || props.value || label);
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        sendPrompt(actionText);
+      });
+      return btn;
+    }
     case "Image": {
       const src = boundStr(props.url || props.src);
       if (!/^https?:\/\//i.test(src)) return null;   // only allow safe URLs
@@ -194,19 +213,14 @@ function renderReply(b, parts) {
   log.scrollTop = log.scrollHeight;
 }
 
-// The proxy returns { parts: [{kind:"text",text} | {kind:"a2ui",data}] }.
-form.addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  const text = input.value.trim();
-  if (!text) return;
-  bubble("user").textContent = text;
+async function sendPrompt(text) {
+  const query = (text || "").trim();
+  if (!query) return;
+  bubble("user").textContent = query;
   input.value = "";
   const b = bubble("agent"); b.textContent = "…";
   try {
-    const res = await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: text }) });
-    // Read as text first, then parse. If the proxy ever returns a non-JSON error
-    // page (e.g. a plain "Internal Server Error"), show that body instead of a
-    // cryptic "Unexpected token" JSON error.
+    const res = await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: query }) });
     const raw = await res.text();
     let data;
     try { data = JSON.parse(raw); }
@@ -215,12 +229,18 @@ form.addEventListener("submit", async (ev) => {
   } catch (e) {
     b.textContent = "Error: " + e.message;
   }
+}
+
+// The proxy returns { parts: [{kind:"text",text} | {kind:"a2ui",data}] }.
+form.addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  sendPrompt(input.value);
 });
+
 // Example prompt chips
 document.querySelectorAll(".chip").forEach((btn) => {
   btn.addEventListener("click", () => {
-    input.value = btn.getAttribute("data-prompt");
-    form.dispatchEvent(new Event("submit"));
+    sendPrompt(btn.getAttribute("data-prompt"));
   });
 });
 </script>
