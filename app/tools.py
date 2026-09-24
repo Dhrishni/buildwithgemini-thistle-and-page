@@ -36,23 +36,31 @@ from app.data_store import (
 )
 from app.firestore_service import (
     add_community_shelf_item,
+    add_item_to_user_shelf_in_db,
     get_community_item,
+    get_user_active_shelf_from_db,
     list_community_shelf_items,
     update_item_borrow_status,
 )
+from app.semantic_service import semantic_rank_items
 
 
-def search_catalog_and_neighborhood(query: str, format_filter: Optional[str] = None) -> Dict[str, Any]:
-    """Searches both San Mateo County digital library shelves and neighborhood P2P shelves in Firestore.
+def search_catalog_and_neighborhood(
+    query: str,
+    format_filter: Optional[str] = None,
+    max_distance_miles: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Searches both San Mateo County digital library shelves and neighborhood P2P shelves with semantic vibe matching and transit filtering.
 
     Args:
-        query: Search term for book title, author, or keyword (e.g., 'Tomorrow', 'Project Hail Mary', 'book light').
+        query: Search term for book title, author, keyword, or natural reading vibe (e.g., 'Tomorrow', 'cozy rainy day tea', 'space opera', 'amber book light').
         format_filter: Optional filter ('ebook', 'audiobook', 'physical', 'gear').
+        max_distance_miles: Optional maximum distance radius in miles for neighborhood physical pickup (e.g. 1.0 for walking).
 
     Returns:
-        A dictionary with matches from both public libraries and neighborhood lending shelves.
+        A dictionary with matches from both public libraries and neighborhood lending shelves, ranked by relevance and semantic vibe score.
     """
-    q = query.lower()
+    q = query.lower().strip()
     library_matches = []
     p2p_matches = []
 
@@ -64,13 +72,11 @@ def search_catalog_and_neighborhood(query: str, format_filter: Optional[str] = N
             immediate_options = []
             for av in book.availabilities:
                 lib_name = LIBRARIES.get(av.library_id, {}).get("name", av.library_id)
-                # find edition format
                 ed = next((e for e in book.editions if e.edition_id == av.edition_id), None)
                 fmt = ed.format if ed else "digital"
                 if format_filter and format_filter.lower() not in fmt.lower():
                     continue
 
-                status_str = f"Available now ({av.copies_available} left)" if av.copies_available > 0 else f"{av.estimated_wait_days}d wait ({av.holds_count} holds)"
                 avail_summary.append({
                     "library": lib_name,
                     "format": fmt,
@@ -94,6 +100,42 @@ def search_catalog_and_neighborhood(query: str, format_filter: Optional[str] = N
                     "availability": avail_summary,
                 })
 
+    # If few or no direct keyword matches, run semantic search over library catalog
+    if len(library_matches) == 0:
+        library_candidates = []
+        for b in SEED_BOOKS.values():
+            immediate_options = [
+                f"{LIBRARIES.get(av.library_id, {}).get('name', av.library_id)} ({next((e.format for e in b.editions if e.edition_id == av.edition_id), 'digital')})"
+                for av in b.availabilities if av.copies_available > 0
+            ]
+            library_candidates.append({
+                "book_id": b.book_id,
+                "title": b.title,
+                "author": b.author,
+                "genre": b.genre,
+                "page_count": b.page_count,
+                "can_start_tonight": len(immediate_options) > 0,
+                "immediate_libraries": immediate_options,
+                "availability": [
+                    {
+                        "library": LIBRARIES.get(av.library_id, {}).get("name", av.library_id),
+                        "format": next((e.format for e in b.editions if e.edition_id == av.edition_id), "digital"),
+                        "available": av.copies_available > 0,
+                        "wait_days": av.estimated_wait_days,
+                        "copies_available": av.copies_available,
+                        "holds": av.holds_count,
+                    }
+                    for av in b.availabilities
+                ],
+            })
+        library_matches = semantic_rank_items(
+            query=query,
+            items=library_candidates,
+            text_key_func=lambda b: f"Title: {b['title']}. Author: {b['author']}. Description: {SEED_BOOKS[b['book_id']].description}. Genre/Vibe: {b['genre']}.",
+            top_k=3,
+            threshold=0.52,
+        )
+
     # 2. Search Neighborhood P2P Items (from Firestore backend, with in-memory fallback)
     try:
         firestore_items = list_community_shelf_items()
@@ -110,6 +152,10 @@ def search_catalog_and_neighborhood(query: str, format_filter: Optional[str] = N
         creator = item.get("author_or_creator", "")
         category = item.get("category", "")
         notes = item.get("notes", "")
+        distance = float(item.get("distance_miles", 0.0))
+
+        if max_distance_miles is not None and distance > max_distance_miles:
+            continue
 
         if (
             q in title.lower()
@@ -131,9 +177,38 @@ def search_catalog_and_neighborhood(query: str, format_filter: Optional[str] = N
                 "condition": item.get("condition"),
                 "owner": item.get("owner_name"),
                 "neighborhood": item.get("owner_neighborhood"),
-                "distance_miles": item.get("distance_miles", 0.0),
+                "distance_miles": distance,
                 "status": item.get("status"),
                 "notes": notes,
+            })
+
+    # If no keyword matches on neighborhood shelf, evaluate semantic vibe match
+    if len(p2p_matches) == 0:
+        p2p_filtered = [
+            it for it in items_to_search
+            if max_distance_miles is None or float(it.get("distance_miles", 0.0)) <= max_distance_miles
+        ]
+        semantic_p2p = semantic_rank_items(
+            query=query,
+            items=p2p_filtered,
+            text_key_func=lambda it: f"Item: {it.get('title')}. Creator: {it.get('author_or_creator')}. Category: {it.get('category')}. Details: {it.get('notes')}.",
+            top_k=3,
+            threshold=0.52,
+        )
+        for s_item in semantic_p2p:
+            p2p_matches.append({
+                "item_id": s_item.get("item_id"),
+                "title": s_item.get("title"),
+                "creator": s_item.get("author_or_creator"),
+                "category": s_item.get("category"),
+                "format": s_item.get("format"),
+                "condition": s_item.get("condition"),
+                "owner": s_item.get("owner_name"),
+                "neighborhood": s_item.get("owner_neighborhood"),
+                "distance_miles": float(s_item.get("distance_miles", 0.0)),
+                "status": s_item.get("status"),
+                "notes": s_item.get("notes"),
+                "vibe_score": s_item.get("semantic_score"),
             })
 
     return {
@@ -239,8 +314,27 @@ def request_neighbor_borrow(item_id: str, duration_days: int = 14, meetup_prefer
         owner_neighborhood = mem_item.owner_neighborhood
         item_format = mem_item.format
 
+    shelf_id = f"shelf_p2p_{int(datetime.now(timezone.utc).timestamp())}"
+    details_str = f"Meetup: {meetup_preference}. Contact neighbor {owner_name} to coordinate."
+
+    # Persist directly into Firestore user shelf
+    try:
+        add_item_to_user_shelf_in_db(
+            user_id="default_reader",
+            shelf_id=shelf_id,
+            title=title,
+            source_type="neighbor_p2p",
+            source_name=f"{owner_name} ({owner_neighborhood})",
+            item_format=item_format,
+            state="borrowed",
+            due_or_available_date=due_date,
+            details=details_str,
+        )
+    except Exception as e:
+        print(f"[Warning] Failed to persist active shelf item to Firestore: {e}")
+
     ACTIVE_SHELF.append(ActiveShelfItem(
-        shelf_id=f"shelf_p2p_{len(ACTIVE_SHELF) + 1}",
+        shelf_id=shelf_id,
         user_id="default_reader",
         title=title,
         source_type="neighbor_p2p",
@@ -248,7 +342,7 @@ def request_neighbor_borrow(item_id: str, duration_days: int = 14, meetup_prefer
         format=item_format,
         state="borrowed",
         due_or_available_date=due_date,
-        details=f"Meetup: {meetup_preference}. Contact neighbor {owner_name} to coordinate."
+        details=details_str,
     ))
 
     return {
@@ -323,24 +417,60 @@ def list_item_for_lending(
     }
 
 
-def get_my_active_shelf() -> Dict[str, Any]:
-    """Retrieves all active items on the user's shelf (public library digital loans + neighbor physical loans).
+def get_my_active_shelf(user_id: str = "default_reader") -> Dict[str, Any]:
+    """Retrieves all active items on the user's shelf from Firestore (public library digital loans + neighbor physical loans).
+
+    Args:
+        user_id: ID of the user (defaults to 'default_reader').
 
     Returns:
         A list of borrowed items with due dates and any active holds.
     """
     items = []
-    for item in ACTIVE_SHELF:
-        items.append({
-            "shelf_id": item.shelf_id,
-            "title": item.title,
-            "source_type": item.source_type,
-            "source": item.source_name,
-            "format": item.format,
-            "state": item.state,
-            "due_date": item.due_or_available_date,
-            "details": item.details,
-        })
+    # 1. Try reading from Firestore user_active_shelves
+    try:
+        db_items = get_user_active_shelf_from_db(user_id=user_id)
+        if not db_items:
+            # Seed default shelf into Firestore on first run
+            for default_item in ACTIVE_SHELF:
+                add_item_to_user_shelf_in_db(
+                    user_id=user_id,
+                    shelf_id=default_item.shelf_id,
+                    title=default_item.title,
+                    source_type=default_item.source_type,
+                    source_name=default_item.source_name,
+                    item_format=default_item.format,
+                    state=default_item.state,
+                    due_or_available_date=default_item.due_or_available_date,
+                    details=default_item.details,
+                )
+            db_items = get_user_active_shelf_from_db(user_id=user_id)
+
+        for d in db_items:
+            items.append({
+                "shelf_id": d.get("shelf_id"),
+                "title": d.get("title"),
+                "source_type": d.get("source_type"),
+                "source": d.get("source_name"),
+                "format": d.get("format"),
+                "state": d.get("state"),
+                "due_date": d.get("due_or_available_date"),
+                "details": d.get("details", ""),
+            })
+    except Exception as e:
+        print(f"[Warning] Failed to fetch user shelf from Firestore, falling back to memory: {e}")
+        for item in ACTIVE_SHELF:
+            items.append({
+                "shelf_id": item.shelf_id,
+                "title": item.title,
+                "source_type": item.source_type,
+                "source": item.source_name,
+                "format": item.format,
+                "state": item.state,
+                "due_date": item.due_or_available_date,
+                "details": item.details,
+            })
+
     return {
         "total_active_items": len(items),
         "items": items,

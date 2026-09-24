@@ -111,3 +111,49 @@ def update_item_borrow_status(
         "borrowed_at": datetime.now(timezone.utc).isoformat(),
     })
     return True
+
+
+SHELF_COLLECTION_NAME = "user_active_shelves"
+
+
+def get_user_active_shelf_from_db(user_id: str = "web-user") -> List[Dict[str, Any]]:
+    """Fetches all active borrowed items and holds for a specific user from Firestore."""
+    db = get_firestore_client()
+    col = db.collection(SHELF_COLLECTION_NAME)
+    docs = col.where("user_id", "==", user_id).stream()
+    items = []
+    for doc in docs:
+        d = doc.to_dict()
+        d["doc_id"] = doc.id
+        items.append(d)
+    return items
+
+
+def add_item_to_user_shelf_in_db(
+    user_id: str,
+    shelf_id: str,
+    title: str,
+    source_type: str,
+    source_name: str,
+    item_format: str,
+    state: str,
+    due_or_available_date: str,
+    details: str = "",
+) -> Dict[str, Any]:
+    """Persists a borrowed item or hold to the user's active shelf in Firestore."""
+    db = get_firestore_client()
+    col = db.collection(SHELF_COLLECTION_NAME)
+    doc_data = {
+        "user_id": user_id,
+        "shelf_id": shelf_id,
+        "title": title,
+        "source_type": source_type,
+        "source_name": source_name,
+        "format": item_format,
+        "state": state,
+        "due_or_available_date": due_or_available_date,
+        "details": details,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    col.document(shelf_id).set(doc_data)
+    return doc_data
