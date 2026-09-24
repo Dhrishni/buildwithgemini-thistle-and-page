@@ -1,7 +1,11 @@
-# simple-agent
+# 🌿 Thistle & Page
 
-Simple ReAct agent
-Agent generated with `agents-cli` version `1.4.0`
+**Unified San Mateo County Library & Neighborhood Peer-to-Peer Lending Copilot**
+
+> 🏛️ **System Architecture & Design**: See [ARCHITECTURE.md](ARCHITECTURE.md) for full architectural diagrams, component breakdowns, data flows, and security model.
+
+- **Live Application (Cloud Run)**: [https://thistle-and-page-frontend-43484983729.us-central1.run.app](https://thistle-and-page-frontend-43484983729.us-central1.run.app)
+- **Agent Platform ID**: `projects/43484983729/locations/us-central1/reasoningEngines/2746715835870478336`
 
 ## Project Structure
 

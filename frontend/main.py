@@ -108,6 +108,61 @@ async def _json_errors(request: Request, exc: Exception):
     )
 
 
+import base64
+import hashlib
+import hmac
+import time
+
+AUTH_SECRET = os.environ.get("AUTH_SECRET", "thistle-and-page-san-mateo-secret-2026")
+
+DEFAULT_PROFILES = [
+    {
+        "user_id": "elena_baywood",
+        "name": "Elena R.",
+        "neighborhood": "Baywood, San Mateo",
+        "avatar": "🌿",
+        "bio": "Avid reader near Central Park; loves cozy solarpunk & audiobooks.",
+    },
+    {
+        "user_id": "marcus_hillsdale",
+        "name": "Marcus T.",
+        "neighborhood": "Hillsdale, San Mateo",
+        "avatar": "📖",
+        "bio": "Hard sci-fi enthusiast; shares reading lamps & hardcover space operas.",
+    },
+    {
+        "user_id": "sarah_burlingame",
+        "name": "Sarah K.",
+        "neighborhood": "Easton Addition, Burlingame",
+        "avatar": "☕",
+        "bio": "Local librarian & tea lover; has Burlingame & San Mateo library cards.",
+    },
+]
+
+
+def create_reader_token(user_id: str, name: str, neighborhood: str) -> str:
+    payload = f"{user_id}:{name}:{neighborhood}:{int(time.time())}"
+    sig = hmac.new(AUTH_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    raw = f"{payload}:{sig}"
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def verify_reader_token(token: str) -> dict:
+    try:
+        raw = base64.urlsafe_b64decode(token.encode()).decode()
+        parts = raw.split(":")
+        if len(parts) != 5:
+            return None
+        user_id, name, neighborhood, ts, sig = parts
+        expected_payload = f"{user_id}:{name}:{neighborhood}:{ts}"
+        expected_sig = hmac.new(AUTH_SECRET.encode(), expected_payload.encode(), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(sig, expected_sig):
+            return {"user_id": user_id, "name": name, "neighborhood": neighborhood}
+    except Exception:
+        pass
+    return None
+
+
 # Reuse ONE A2A context per user so the agent remembers the conversation.
 _contexts: dict[str, str] = {}
 # Cache the agent card after the first fetch.
@@ -164,11 +219,70 @@ def _extract_parts(parts: list) -> list[dict]:
     return out
 
 
+@app.get("/api/auth/profiles")
+async def get_profiles():
+    """Lists community reader profiles available for quick-switch testing."""
+    return JSONResponse({"profiles": DEFAULT_PROFILES})
+
+
+@app.post("/api/auth/login")
+async def login(req: Request):
+    """Logs in or registers a lightweight reader identity and issues an HMAC-signed token."""
+    body = await req.json()
+    user_id = (body.get("user_id") or "").strip().lower()
+    name = (body.get("name") or "").strip()
+    neighborhood = (body.get("neighborhood") or "").strip()
+
+    if not user_id:
+        user_id = f"reader_{uuid.uuid4().hex[:6]}"
+    if not name:
+        # Match from default profile or generate friendly name
+        p = next((x for x in DEFAULT_PROFILES if x["user_id"] == user_id), None)
+        name = p["name"] if p else f"Reader {user_id[-4:]}"
+    if not neighborhood:
+        p = next((x for x in DEFAULT_PROFILES if x["user_id"] == user_id), None)
+        neighborhood = p["neighborhood"] if p else "San Mateo County"
+
+    token = create_reader_token(user_id=user_id, name=name, neighborhood=neighborhood)
+    return JSONResponse({
+        "token": token,
+        "user_id": user_id,
+        "name": name,
+        "neighborhood": neighborhood,
+    })
+
+
 @app.post("/chat")
 async def chat(req: Request):
     body = await req.json()
     message = body.get("message", "")
-    user_id = body.get("user_id") or "web-user"
+    
+    # 1. Resolve Reader Identity from Token or Payload
+    auth_header = req.headers.get("Authorization", "")
+    token = None
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    elif body.get("token"):
+        token = body.get("token")
+
+    verified_user = verify_reader_token(token) if token else None
+    if verified_user:
+        user_id = verified_user["user_id"]
+        reader_name = verified_user["name"]
+        reader_neighborhood = verified_user["neighborhood"]
+    else:
+        # Default or fallback profile
+        user_id = (body.get("user_id") or "elena_baywood").strip().lower()
+        p = next((x for x in DEFAULT_PROFILES if x["user_id"] == user_id), None)
+        reader_name = p["name"] if p else "Elena R."
+        reader_neighborhood = p["neighborhood"] if p else "Baywood, San Mateo"
+
+    # Enrich prompt with authenticated reader identity for tool scoping & conversational warmth
+    scoped_prompt = (
+        f"[Authenticated Reader: {reader_name} (id: {user_id}, neighborhood: {reader_neighborhood})]\n"
+        f"{message}"
+    )
+
     parts: list[dict] = []
 
     async with httpx.AsyncClient(headers=_auth_headers(), timeout=120) as client:
@@ -187,7 +301,7 @@ async def chat(req: Request):
         msg = Message(
             message_id=str(uuid.uuid4()),
             role=Role.user,
-            parts=[Part(root=TextPart(text=message))],
+            parts=[Part(root=TextPart(text=scoped_prompt))],
             context_id=_contexts.get(user_id),
         )
 
@@ -211,10 +325,15 @@ async def chat(req: Request):
                 parts.extend(_extract_parts(artifact.parts))
 
     if not parts:
-        # The turn produced no text or UI (e.g. the agent only ran tools, or a
-        # tool stalled). Be honest rather than silent.
         parts = [{"kind": "text", "text": "(The agent didn't return a reply.)"}]
-    return JSONResponse({"parts": parts})
+    return JSONResponse({
+        "parts": parts,
+        "reader": {
+            "user_id": user_id,
+            "name": reader_name,
+            "neighborhood": reader_neighborhood,
+        }
+    })
 
 
 # Serve the chat UI (keep this mount last so /chat wins).

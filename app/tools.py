@@ -264,13 +264,21 @@ def optimize_library_holds(book_id: str, preferred_format: Optional[str] = None)
     }
 
 
-def request_neighbor_borrow(item_id: str, duration_days: int = 14, meetup_preference: str = "porch_pickup") -> Dict[str, Any]:
+def request_neighbor_borrow(
+    item_id: str,
+    duration_days: int = 14,
+    meetup_preference: str = "porch_pickup",
+    user_id: str = "default_reader",
+    borrower_name: str = "Neighbor Reader",
+) -> Dict[str, Any]:
     """Sends a request to borrow a physical book or reading gear from a neighbor.
 
     Args:
         item_id: ID of the community item (e.g., 'item_1', 'item_2', 'item_3', 'item_4').
         duration_days: Requested loan duration in days (default 14 days).
         meetup_preference: Preferred handoff method ('porch_pickup', 'library_meetup', 'coffee_shop').
+        user_id: Unique identifier of the borrowing reader (e.g., 'elena_baywood', 'marcus_hillsdale').
+        borrower_name: Moniker/name of the borrowing reader.
 
     Returns:
         Confirmation and instructions for coordinating with the neighbor.
@@ -290,7 +298,7 @@ def request_neighbor_borrow(item_id: str, duration_days: int = 14, meetup_prefer
 
         # Update in Firestore
         try:
-            update_item_borrow_status(item_id, borrowed_by="default_reader", due_date=due_date)
+            update_item_borrow_status(item_id, borrowed_by=borrower_name or user_id, due_date=due_date)
         except Exception:
             pass
 
@@ -307,7 +315,7 @@ def request_neighbor_borrow(item_id: str, duration_days: int = 14, meetup_prefer
             return {"error": f"Item '{mem_item.title}' is currently marked as {mem_item.status}."}
         mem_item.status = "borrowed"
         mem_item.due_date = due_date
-        mem_item.borrowed_by = "default_reader"
+        mem_item.borrowed_by = borrower_name or user_id
 
         title = mem_item.title
         owner_name = mem_item.owner_name
@@ -317,10 +325,10 @@ def request_neighbor_borrow(item_id: str, duration_days: int = 14, meetup_prefer
     shelf_id = f"shelf_p2p_{int(datetime.now(timezone.utc).timestamp())}"
     details_str = f"Meetup: {meetup_preference}. Contact neighbor {owner_name} to coordinate."
 
-    # Persist directly into Firestore user shelf
+    # Persist directly into Firestore user shelf for the specific user
     try:
         add_item_to_user_shelf_in_db(
-            user_id="default_reader",
+            user_id=user_id,
             shelf_id=shelf_id,
             title=title,
             source_type="neighbor_p2p",
@@ -335,7 +343,7 @@ def request_neighbor_borrow(item_id: str, duration_days: int = 14, meetup_prefer
 
     ACTIVE_SHELF.append(ActiveShelfItem(
         shelf_id=shelf_id,
-        user_id="default_reader",
+        user_id=user_id,
         title=title,
         source_type="neighbor_p2p",
         source_name=f"{owner_name} ({owner_neighborhood})",

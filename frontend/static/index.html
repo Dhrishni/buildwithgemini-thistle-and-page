@@ -11,49 +11,57 @@
   :root { --accent:#6b3fa0; --accent-hover:#553082; --bg:#f8f7fa; --border:#e2d9ec; }
   * { box-sizing:border-box; }
   body { margin:0; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); display:flex; flex-direction:column; height:100vh; }
-  header { background:var(--accent); color:#fff; padding:1rem 1.4rem; font-weight:700; font-size:1.15rem; letter-spacing:0.02em; display:flex; align-items:center; gap:0.6rem; box-shadow:0 2px 6px rgba(107,63,160,0.15); }
-  header span.subtitle { font-size:0.85rem; font-weight:400; opacity:0.85; margin-left:auto; }
-  #log { flex:1; overflow-y:auto; padding:1.2rem; max-width:780px; width:100%; margin:0 auto; }
-  .msg { margin:.6rem 0; }
-  .msg.user { text-align:right; }
-  .bubble { display:inline-block; padding:.6rem .9rem; border-radius:12px; background:#fff; border:1px solid var(--border); text-align:left; max-width:90%; white-space:pre-wrap; }
-  .msg.user .bubble { background:var(--accent); color:#fff; border:none; }
-  /* When the reply is an A2UI card, drop the bubble chrome so the card stands alone. */
-  .bubble.rich { background:transparent; border:none; padding:0; max-width:100%; white-space:normal; }
-  .prompt-row { display:flex; gap:0.5rem; padding:0.6rem 1rem 0; background:#fff; overflow-x:auto; flex-wrap:nowrap; }
-  .chip { border:1px solid var(--border); background:#fcfbff; color:#4a2b6d; border-radius:18px; padding:0.35rem 0.8rem; font-size:0.85rem; font-weight:500; cursor:pointer; white-space:nowrap; transition:all 0.15s ease; box-shadow:0 1px 2px rgba(0,0,0,0.03); }
-  .chip:hover { background:#f3ecf8; border-color:var(--accent); color:var(--accent); }
-  form { display:flex; gap:.5rem; padding:0.8rem 1rem; border-top:1px solid #f0eaf7; background:#fff; }
-  input { flex:1; padding:.7rem; border:1px solid var(--border); border-radius:8px; font-size:1rem; outline-color:var(--accent); }
-  button { padding:.7rem 1.2rem; border:none; border-radius:8px; background:var(--accent); color:#fff; font-weight:600; cursor:pointer; transition:background 0.15s ease; }
-  button:hover { background:var(--accent-hover); }
+  header { background:var(--accent); color:#fff; padding:0.8rem 1.4rem; font-weight:700; font-size:1.15rem; letter-spacing:0.02em; display:flex; align-items:center; gap:0.6rem; box-shadow:0 2px 6px rgba(107,63,160,0.15); }
+  header span.subtitle { font-size:0.85rem; font-weight:400; opacity:0.85; margin-left:0.5rem; }
+  .user-badge { margin-left:auto; display:flex; align-items:center; gap:0.5rem; background:rgba(255,255,255,0.18); padding:0.35rem 0.75rem; border-radius:20px; font-size:0.85rem; font-weight:500; cursor:pointer; transition:background 0.15s ease; border:1px solid rgba(255,255,255,0.3); }
+  .user-badge:hover { background:rgba(255,255,255,0.28); }
+  .user-badge span.switch-hint { font-size:0.75rem; opacity:0.85; text-decoration:underline; margin-left:0.2rem; }
 
-  /* --- A2UI component styles (Card, Column, Row, Text, Divider, List, Image, Icon) --- */
-  .a2card { border:1px solid var(--border); border-radius:12px; padding:1rem; background:#fff; box-shadow:0 2px 8px rgba(107,63,160,.06); max-width:100%; }
-  .a2card + .a2card, .a2col > .a2card { margin-top:.6rem; }
-  .a2col { display:flex; flex-direction:column; gap:.4rem; }
-  .a2row { display:flex; flex-direction:row; gap:.6rem; align-items:center; flex-wrap:wrap; }
-  .a2row.between { justify-content:space-between; }
-  .a2text { margin:0; line-height:1.4; }
-  .a2text.a2-h1 { font-size:1.5rem; font-weight:700; color:#3b1e5a; }
-  .a2text.a2-h2 { font-size:1.25rem; font-weight:700; color:#3b1e5a; }
-  .a2text.a2-h3 { font-size:1.1rem; font-weight:600; color:#4a2b6d; }
-  .a2text.a2-h4 { font-size:1rem; font-weight:600; }
-  .a2text.a2-caption { font-size:.85rem; color:#6b5f79; }
-  .a2divider { border:none; border-top:1px solid var(--border); margin:.4rem 0; width:100%; }
-  .a2img { max-width:100%; border-radius:8px; display:block; }
-  .a2btn { display:inline-flex; align-items:center; justify-content:center; gap:0.4rem; padding:0.45rem 0.9rem; font-size:0.88rem; font-weight:600; color:#fff; background:var(--accent); border:none; border-radius:6px; cursor:pointer; margin-top:0.35rem; transition:background 0.15s ease; box-shadow:0 1px 3px rgba(107,63,160,0.15); width:fit-content; }
-  .a2btn:hover { background:var(--accent-hover); }
-  .material-symbols-outlined { font-family:'Material Symbols Outlined'; font-size:1.25rem; line-height:1; vertical-align:middle; color:var(--accent); }
+  /* Modal */
+  .modal-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center; backdrop-filter:blur(2px); }
+  .modal-overlay.open { display:flex; }
+  .modal-box { background:#fff; border-radius:14px; width:90%; max-width:440px; padding:1.5rem; box-shadow:0 12px 30px rgba(0,0,0,0.2); animation:popIn 0.18s ease-out; }
+  @keyframes popIn { from { transform:scale(0.95); opacity:0; } to { transform:scale(1); opacity:1; } }
+  .modal-title { font-size:1.15rem; font-weight:700; color:#3b1e5a; margin-top:0; margin-bottom:0.4rem; }
+  .modal-desc { font-size:0.85rem; color:#6b5f79; margin-bottom:1rem; }
+  .profile-list { display:flex; flex-direction:column; gap:0.6rem; margin-bottom:1.2rem; }
+  .profile-card { border:1px solid var(--border); border-radius:10px; padding:0.75rem 0.9rem; display:flex; align-items:center; gap:0.75rem; cursor:pointer; transition:all 0.15s ease; }
+  .profile-card:hover { border-color:var(--accent); background:#faf7fd; }
+  .profile-card.active { border-color:var(--accent); background:#f3ecf8; box-shadow:0 0 0 1px var(--accent); }
+  .profile-avatar { font-size:1.5rem; line-height:1; }
+  .profile-info { flex:1; }
+  .profile-name { font-weight:600; font-size:0.95rem; color:#3b1e5a; }
+  .profile-loc { font-size:0.8rem; color:#6b5f79; }
+  .modal-actions { display:flex; justify-content:flex-end; gap:0.5rem; }
+  .btn-secondary { background:#e9e3f0; color:#4a2b6d; padding:0.55rem 1rem; border-radius:6px; font-weight:600; font-size:0.85rem; border:none; cursor:pointer; }
+  .btn-secondary:hover { background:#ded5e8; }
 </style>
 </head>
 <body>
 <header>
   <span>🌿 Thistle &amp; Page</span>
-  <span class="subtitle">San Mateo County Library &amp; Neighborhood Lending</span>
+  <span class="subtitle">San Mateo County Lending</span>
+  <div class="user-badge" id="readerBadge" title="Click to switch reader identity">
+    <span id="badgeAvatar">👤</span>
+    <span id="badgeName">Elena R. (Baywood)</span>
+    <span class="switch-hint">Switch</span>
+  </div>
 </header>
+
+<div class="modal-overlay" id="profileModal">
+  <div class="modal-box">
+    <h3 class="modal-title">Select Reader Profile</h3>
+    <p class="modal-desc">Switch between verified San Mateo community readers to verify isolated active shelves and borrowing records.</p>
+    <div class="profile-list" id="profileList"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="closeModalBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <div id="log"></div>
 <div class="prompt-row" id="chips">
+  <button type="button" class="chip" data-prompt="Who am I and what is currently on my active lending shelf and hold schedule?">👤 Who am I & my shelf</button>
   <button type="button" class="chip" data-prompt="Find available copies of Dune across San Mateo County library branches.">📚 Check library holds for Dune</button>
   <button type="button" class="chip" data-prompt="Search our neighborhood community shelf in San Mateo for cozy books or reading gear.">🏡 Browse neighborhood shelf</button>
   <button type="button" class="chip" data-prompt="Show my active library holds and neighbor loan return schedule.">📅 View my lending schedule</button>
@@ -215,6 +223,96 @@ function renderReply(b, parts) {
   log.scrollTop = log.scrollHeight;
 }
 
+/* ----------------------------------------------------------------------------
+ * Lightweight Authentication & Reader Identity Management
+ * -------------------------------------------------------------------------- */
+let currentProfile = {
+  user_id: "elena_baywood",
+  name: "Elena R.",
+  neighborhood: "Baywood, San Mateo",
+  avatar: "🌿"
+};
+let sessionToken = localStorage.getItem("reader_token") || "";
+
+const badgeEl = document.getElementById("readerBadge");
+const badgeAvatar = document.getElementById("badgeAvatar");
+const badgeName = document.getElementById("badgeName");
+const profileModal = document.getElementById("profileModal");
+const profileList = document.getElementById("profileList");
+const closeModalBtn = document.getElementById("closeModalBtn");
+
+function updateBadgeUI() {
+  badgeAvatar.textContent = currentProfile.avatar || "👤";
+  badgeName.textContent = `${currentProfile.name} (${currentProfile.neighborhood.split(',')[0]})`;
+}
+
+async function loginAsProfile(profile) {
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(profile)
+    });
+    const data = await res.json();
+    sessionToken = data.token;
+    localStorage.setItem("reader_token", sessionToken);
+    currentProfile = {
+      user_id: data.user_id,
+      name: data.name,
+      neighborhood: data.neighborhood,
+      avatar: profile.avatar || "👤"
+    };
+    localStorage.setItem("reader_profile", JSON.stringify(currentProfile));
+    updateBadgeUI();
+  } catch (err) {
+    console.error("Login failed:", err);
+  }
+}
+
+async function loadProfiles() {
+  try {
+    const res = await fetch("/api/auth/profiles");
+    const data = await res.json();
+    profileList.textContent = "";
+    (data.profiles || []).forEach(p => {
+      const card = el("div", "profile-card" + (p.user_id === currentProfile.user_id ? " active" : ""));
+      const av = el("div", "profile-avatar", p.avatar || "👤");
+      const info = el("div", "profile-info");
+      const name = el("div", "profile-name", p.name);
+      const loc = el("div", "profile-loc", `${p.neighborhood} • ${p.bio}`);
+      info.appendChild(name);
+      info.appendChild(loc);
+      card.appendChild(av);
+      card.appendChild(info);
+
+      card.addEventListener("click", async () => {
+        await loginAsProfile(p);
+        profileModal.classList.remove("open");
+        bubble("agent").textContent = `Switched active reader to ${p.name} (${p.neighborhood}). Your active shelf, holds, and borrowing sessions are now scoped to your account.`;
+      });
+      profileList.appendChild(card);
+    });
+  } catch (err) {
+    console.error("Failed to load profiles:", err);
+  }
+}
+
+// Initialize session
+try {
+  const saved = localStorage.getItem("reader_profile");
+  if (saved) currentProfile = JSON.parse(saved);
+} catch (e) {}
+updateBadgeUI();
+loginAsProfile(currentProfile);
+
+badgeEl.addEventListener("click", () => {
+  loadProfiles();
+  profileModal.classList.add("open");
+});
+closeModalBtn.addEventListener("click", () => {
+  profileModal.classList.remove("open");
+});
+
 async function sendPrompt(text) {
   const query = (text || "").trim();
   if (!query) return;
@@ -222,7 +320,19 @@ async function sendPrompt(text) {
   input.value = "";
   const b = bubble("agent"); b.textContent = "…";
   try {
-    const res = await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: query }) });
+    const headers = { "Content-Type": "application/json" };
+    if (sessionToken) {
+      headers["Authorization"] = `Bearer ${sessionToken}`;
+    }
+    const res = await fetch("/chat", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        message: query,
+        user_id: currentProfile.user_id,
+        token: sessionToken
+      })
+    });
     const raw = await res.text();
     let data;
     try { data = JSON.parse(raw); }
