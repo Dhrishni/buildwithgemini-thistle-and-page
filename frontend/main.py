@@ -140,8 +140,8 @@ DEFAULT_PROFILES = [
 ]
 
 
-def create_reader_token(user_id: str, name: str, neighborhood: str) -> str:
-    payload = f"{user_id}:{name}:{neighborhood}:{int(time.time())}"
+def create_reader_token(user_id: str, name: str, neighborhood: str, email: str = "") -> str:
+    payload = f"{user_id}:{name}:{neighborhood}:{email}:{int(time.time())}"
     sig = hmac.new(AUTH_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
     raw = f"{payload}:{sig}"
     return base64.urlsafe_b64encode(raw.encode()).decode()
@@ -151,13 +151,19 @@ def verify_reader_token(token: str) -> dict:
     try:
         raw = base64.urlsafe_b64decode(token.encode()).decode()
         parts = raw.split(":")
-        if len(parts) != 5:
-            return None
-        user_id, name, neighborhood, ts, sig = parts
-        expected_payload = f"{user_id}:{name}:{neighborhood}:{ts}"
-        expected_sig = hmac.new(AUTH_SECRET.encode(), expected_payload.encode(), hashlib.sha256).hexdigest()
-        if hmac.compare_digest(sig, expected_sig):
-            return {"user_id": user_id, "name": name, "neighborhood": neighborhood}
+        if len(parts) == 6:
+            user_id, name, neighborhood, email, ts, sig = parts
+            expected_payload = f"{user_id}:{name}:{neighborhood}:{email}:{ts}"
+            expected_sig = hmac.new(AUTH_SECRET.encode(), expected_payload.encode(), hashlib.sha256).hexdigest()
+            if hmac.compare_digest(sig, expected_sig):
+                return {"user_id": user_id, "name": name, "neighborhood": neighborhood, "email": email}
+        elif len(parts) == 5:
+            # Backward compatibility with earlier 5-part tokens
+            user_id, name, neighborhood, ts, sig = parts
+            expected_payload = f"{user_id}:{name}:{neighborhood}:{ts}"
+            expected_sig = hmac.new(AUTH_SECRET.encode(), expected_payload.encode(), hashlib.sha256).hexdigest()
+            if hmac.compare_digest(sig, expected_sig):
+                return {"user_id": user_id, "name": name, "neighborhood": neighborhood, "email": ""}
     except Exception:
         pass
     return None
@@ -219,37 +225,181 @@ def _extract_parts(parts: list) -> list[dict]:
     return out
 
 
+import google.oauth2.id_token
+from google.auth.transport import requests as google_requests
+from firestore_service import (
+    create_or_update_user,
+    get_user_by_id_or_email,
+    verify_password,
+)
+
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+
+
 @app.get("/api/auth/profiles")
 async def get_profiles():
     """Lists community reader profiles available for quick-switch testing."""
     return JSONResponse({"profiles": DEFAULT_PROFILES})
 
 
+@app.get("/api/auth/me")
+async def get_me(req: Request):
+    """Returns currently authenticated user profile from bearer token."""
+    auth_header = req.headers.get("Authorization", "")
+    token = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    user = verify_reader_token(token) if token else None
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
+    return JSONResponse({"user": user})
+
+
+@app.post("/api/auth/register")
+async def register(req: Request):
+    """Registers a new reader with email and password into Firestore."""
+    body = await req.json()
+    email = (body.get("email") or "").strip().lower()
+    password = body.get("password") or ""
+    name = (body.get("name") or "").strip()
+    neighborhood = (body.get("neighborhood") or "San Mateo County").strip()
+
+    if not email or "@" not in email:
+        return JSONResponse(status_code=400, content={"error": "A valid email address is required."})
+    if len(password) < 6:
+        return JSONResponse(status_code=400, content={"error": "Password must be at least 6 characters."})
+    if not name:
+        name = email.split("@")[0].capitalize()
+
+    existing = get_user_by_id_or_email(email)
+    if existing and existing.get("password_hash"):
+        return JSONResponse(status_code=409, content={"error": "An account with this email already exists. Please sign in."})
+
+    user_id = f"user_{email.replace('@', '_at_').replace('.', '_')}"
+    user_doc = create_or_update_user(
+        user_id=user_id,
+        email=email,
+        name=name,
+        neighborhood=neighborhood,
+        auth_provider="password",
+        password=password,
+        avatar="👤",
+    )
+
+    token = create_reader_token(user_id=user_id, name=name, neighborhood=neighborhood, email=email)
+    return JSONResponse({
+        "token": token,
+        "user_id": user_id,
+        "name": name,
+        "neighborhood": neighborhood,
+        "email": email,
+        "avatar": user_doc.get("avatar", "👤"),
+    })
+
+
 @app.post("/api/auth/login")
 async def login(req: Request):
-    """Logs in or registers a lightweight reader identity and issues an HMAC-signed token."""
+    """Logs in using either email+password or demo persona quick-switch."""
     body = await req.json()
+    email = (body.get("email") or "").strip().lower()
+    password = body.get("password") or ""
     user_id = (body.get("user_id") or "").strip().lower()
+
+    # 1. Email + Password Flow
+    if email and password:
+        user_doc = get_user_by_id_or_email(email)
+        if not user_doc or not user_doc.get("password_hash"):
+            return JSONResponse(status_code=401, content={"error": "Invalid email or password."})
+        if not verify_password(user_doc["password_hash"], password):
+            return JSONResponse(status_code=401, content={"error": "Invalid email or password."})
+        
+        token = create_reader_token(
+            user_id=user_doc["user_id"],
+            name=user_doc["name"],
+            neighborhood=user_doc.get("neighborhood", "San Mateo"),
+            email=user_doc.get("email", email),
+        )
+        return JSONResponse({
+            "token": token,
+            "user_id": user_doc["user_id"],
+            "name": user_doc["name"],
+            "neighborhood": user_doc.get("neighborhood", "San Mateo"),
+            "email": user_doc.get("email", email),
+            "avatar": user_doc.get("avatar", "👤"),
+        })
+
+    # 2. Demo Persona Quick-Switch Flow
     name = (body.get("name") or "").strip()
     neighborhood = (body.get("neighborhood") or "").strip()
-
     if not user_id:
         user_id = f"reader_{uuid.uuid4().hex[:6]}"
     if not name:
-        # Match from default profile or generate friendly name
         p = next((x for x in DEFAULT_PROFILES if x["user_id"] == user_id), None)
         name = p["name"] if p else f"Reader {user_id[-4:]}"
     if not neighborhood:
         p = next((x for x in DEFAULT_PROFILES if x["user_id"] == user_id), None)
         neighborhood = p["neighborhood"] if p else "San Mateo County"
 
-    token = create_reader_token(user_id=user_id, name=name, neighborhood=neighborhood)
+    # Provision/sync in Firestore
+    user_doc = create_or_update_user(
+        user_id=user_id,
+        email=f"{user_id}@community.thistlepage.local",
+        name=name,
+        neighborhood=neighborhood,
+        auth_provider="persona",
+        avatar="🌿",
+    )
+
+    token = create_reader_token(user_id=user_id, name=name, neighborhood=neighborhood, email=user_doc.get("email", ""))
     return JSONResponse({
         "token": token,
         "user_id": user_id,
         "name": name,
         "neighborhood": neighborhood,
+        "email": user_doc.get("email", ""),
+        "avatar": user_doc.get("avatar", "🌿"),
     })
+
+
+@app.post("/api/auth/google")
+async def google_login(req: Request):
+    """Federated Google SSO login using Google ID token verification."""
+    body = await req.json()
+    credential = body.get("credential") or ""
+    if not credential:
+        return JSONResponse(status_code=400, content={"error": "Missing Google ID token credential."})
+
+    try:
+        # Verify the Google OIDC ID token
+        id_info = google.oauth2.id_token.verify_oauth2_token(
+            credential,
+            google_requests.Request(),
+            audience=GOOGLE_CLIENT_ID if GOOGLE_CLIENT_ID else None,
+        )
+        email = id_info.get("email", "").lower().strip()
+        name = id_info.get("name") or email.split("@")[0]
+        google_sub = id_info.get("sub", "")
+        user_id = f"google_{google_sub}"
+
+        user_doc = create_or_update_user(
+            user_id=user_id,
+            email=email,
+            name=name,
+            neighborhood="San Mateo County",
+            auth_provider="google",
+            avatar="🇬",
+        )
+
+        token = create_reader_token(user_id=user_id, name=name, neighborhood=user_doc.get("neighborhood", "San Mateo"), email=email)
+        return JSONResponse({
+            "token": token,
+            "user_id": user_id,
+            "name": name,
+            "neighborhood": user_doc.get("neighborhood", "San Mateo"),
+            "email": email,
+            "avatar": "🇬",
+        })
+    except Exception as e:
+        return JSONResponse(status_code=401, content={"error": f"Google authentication failed: {str(e)}"})
+
 
 
 @app.post("/chat")

@@ -2,8 +2,9 @@
 
 **Unified San Mateo County Library & Neighborhood Peer-to-Peer Lending Copilot**
 
-Live Application: [https://thistle-and-page-frontend-43484983729.us-central1.run.app](https://thistle-and-page-frontend-43484983729.us-central1.run.app)  
-GitHub Repository: [https://github.com/Dhrishni/buildwithgemini-thistle-and-page](https://github.com/Dhrishni/buildwithgemini-thistle-and-page)
+- **Live Application (Google Cloud Run)**: [https://thistle-and-page-frontend-43484983729.us-central1.run.app](https://thistle-and-page-frontend-43484983729.us-central1.run.app)
+- **Agent Platform Runtime**: `projects/43484983729/locations/us-central1/reasoningEngines/2746715835870478336`
+- **GitHub Repository**: [https://github.com/Dhrishni/buildwithgemini-thistle-and-page](https://github.com/Dhrishni/buildwithgemini-thistle-and-page)
 
 ---
 
@@ -13,13 +14,13 @@ GitHub Repository: [https://github.com/Dhrishni/buildwithgemini-thistle-and-page
 flowchart TD
     subgraph Client["Frontend Client (Browser)"]
         UI["Web Chat UI (Mobile / Desktop)"]
-        AUTH_UI["Reader Identity Badge & Quick Switcher"]
-        RENDERER["A2UI v0.8 Mini-Renderer (Cards, Images, Action Buttons)"]
-        STORAGE["Local Session Storage (Bearer HMAC Token & Profile)"]
+        AUTH_UI["Identity Center Modal\n(Email/Password, Google SSO, Personas)"]
+        RENDERER["A2UI v0.8 Mini-Renderer\n(Cards, Images, Action Buttons)"]
+        STORAGE["Local Session Storage\n(Bearer HMAC Token & Profile)"]
     end
 
     subgraph CloudRun["FastAPI Gateway Proxy (Google Cloud Run)"]
-        AUTH_ROUTER["Lightweight Token Auth (/api/auth/login, /profiles)"]
+        AUTH_ROUTER["Production Auth Controller\n- /api/auth/register (PBKDF2-SHA256)\n- /api/auth/login\n- /api/auth/google (Google OIDC ID Token)"]
         PROXY["A2A Proxy Gateway (/chat)"]
         CTX_MGR["Per-User Context & Prompt Scoping"]
     end
@@ -32,25 +33,31 @@ flowchart TD
     end
 
     subgraph Services["GCP Cloud Services & Data Stores"]
-        FIRESTORE[("Cloud Firestore\n- community_shelf\n- user_active_shelves")]
+        FIRESTORE_USERS[("Cloud Firestore: users\n(Durable user directory)")]
+        FIRESTORE_SHELVES[("Cloud Firestore: user_active_shelves\n(Per-user loans & holds)")]
+        FIRESTORE_COMMUNITY[("Cloud Firestore: community_shelf\n(Neighborhood catalog)")]
         VERTEX_EMBED["Vertex AI Embeddings\n(text-embedding-005)"]
         VERTEX_IMAGE["Imagen 3 / Flash-Lite-Image\n(gemini-3.1-flash-lite-image)"]
-        GCS_BUCKET[("Cloud Storage (GCS Public Assets)\ngs://thistle-and-page-assets-9683cc")]
+        GCS_BUCKET[("Cloud Storage Public Assets\ngs://thistle-and-page-assets-9683cc")]
         MEMORY_BANK["Vertex AI Memory Bank\n(Cross-session user profile)"]
     end
 
-    %% Flow connections
-    AUTH_UI <-->|Login / Switch| AUTH_ROUTER
+    %% Client flows
+    AUTH_UI <-->|Register / Login / Google SSO| AUTH_ROUTER
     UI -->|POST /chat with Bearer Token| PROXY
+    AUTH_ROUTER <-->|Read / Write Profiles| FIRESTORE_USERS
     PROXY --> CTX_MGR
     CTX_MGR -->|A2A Protocol / gRPC| ROOT_AGENT
+
+    %% Agent platform flows
     ROOT_AGENT --> A2UI_CB
     ROOT_AGENT --> MEM_CB
     MEM_CB --> MEMORY_BANK
 
-    ROOT_AGENT -->|Persist loans, holds, items| FIRESTORE
+    ROOT_AGENT -->|Persist loans, holds| FIRESTORE_SHELVES
+    ROOT_AGENT -->|Query book inventory| FIRESTORE_COMMUNITY
     ROOT_AGENT -->|Vibe semantic search| VERTEX_EMBED
-    ROOT_AGENT -->|Bookmark / cover art generation| VERTEX_IMAGE
+    ROOT_AGENT -->|Bookmark & cover art| VERTEX_IMAGE
     VERTEX_IMAGE -->|Public media URLs| GCS_BUCKET
     ROOT_AGENT -->|Reading pace math| CODE_BOX
 
@@ -64,15 +71,21 @@ flowchart TD
 ## 2. Core Subsystems & Components
 
 ### A. Client & User Identity Tier (Browser / Frontend)
-- **Header Reader Badge**: Displays authenticated reader persona (e.g. `🌿 Elena R. (Baywood)`, `📖 Marcus T. (Hillsdale)`, `☕ Sarah K. (Burlingame)`).
-- **Lightweight Token Auth**: Issues HMAC-SHA256 bearer tokens stored in browser `localStorage`, seamlessly passed in the `Authorization: Bearer <token>` header on every turn.
-- **A2UI v0.8 Native Engine**: Displays interactive cards with zero boilerplate, live action buttons (`.a2btn`), material icons, and inline public image assets without HTML injection vulnerabilities.
+- **Header Reader Badge**: Displays active user profile (`Maya H. (Hillsdale)`, `Elena R. (Baywood)`), or prompts Sign In.
+- **Tabbed Authentication Center**:
+  1. **Email & Password**: In-app registration and sign-in with client and server validation.
+  2. **Google Sign-In / SSO**: One-click authentication with Google Identity Services (`gsi/client`).
+  3. **Community Personas**: 1-click test personas for quick evaluator demos.
+- **Session Persistence**: HMAC-SHA256 bearer tokens stored in browser `localStorage`, passed in `Authorization: Bearer <token>` on all `/chat` turns.
+- **A2UI v0.8 Native Engine**: Renders interactive cards with zero boilerplate, live action buttons (`.a2btn`), material icons, and inline public image assets without HTML injection vulnerabilities.
 
 ### B. Gateway & Proxy Tier (Cloud Run)
 - **Service**: `thistle-and-page-frontend` running FastAPI and Uvicorn.
-- **Identity Scoping**: Resolves and validates incoming bearer tokens, extracts `user_id`, and enriches agent prompts with authenticated context:
+- **Password Security**: Salted PBKDF2-HMAC-SHA256 (100,000 iterations) with cryptographic comparison.
+- **Google SSO Verification**: Server-side verification of Google OIDC ID tokens via `google.oauth2.id_token.verify_oauth2_token`.
+- **Identity Scoping**: Resolves incoming bearer tokens, extracts `user_id`, and enriches agent prompts:
   `[Authenticated Reader: Name (id: user_id, neighborhood: neighborhood)]`.
-- **A2A Client**: Manages persistent conversation contexts (`context_id`) mapped per user to ensure isolated dialogue history across multiple users.
+- **A2A Client**: Manages isolated conversation contexts (`context_id`) mapped per user to ensure independent conversation history across 100+ concurrent readers.
 
 ### C. Agent Reasoning & Tool Tier (Vertex AI Agent Engine)
 - **Core LLM**: `gemini-2.5-flash` orchestrated via Google ADK (Agent Development Kit).
@@ -86,8 +99,9 @@ flowchart TD
 
 ### D. Data & Storage Tier
 1. **Google Cloud Firestore**:
-   - `community_shelf`: Catalog of physical books and reading accessories offered by neighbors in San Mateo County.
+   - `users`: Production user directory storing emails, hashed credentials, Google identity IDs, names, neighborhoods, and library card numbers.
    - `user_active_shelves`: Per-user active loans, library holds, due dates, and handoff instructions.
+   - `community_shelf`: Catalog of physical books and reading accessories offered by neighbors in San Mateo County.
 2. **Vertex AI Embeddings (`text-embedding-005`)**:
    - 768-dimensional dense vector embeddings providing cosine-similarity semantic search across books and mood vibes.
 3. **Google Cloud Storage (GCS)**:

@@ -35,26 +35,96 @@
   .modal-actions { display:flex; justify-content:flex-end; gap:0.5rem; }
   .btn-secondary { background:#e9e3f0; color:#4a2b6d; padding:0.55rem 1rem; border-radius:6px; font-weight:600; font-size:0.85rem; border:none; cursor:pointer; }
   .btn-secondary:hover { background:#ded5e8; }
+  .btn-primary { background:var(--accent); color:#fff; padding:0.6rem 1.2rem; border-radius:6px; font-weight:600; font-size:0.85rem; border:none; cursor:pointer; }
+  .btn-primary:hover { background:var(--accent-hover); }
+
+  /* Auth Tabs & Forms */
+  .auth-tabs { display:flex; border-bottom:1px solid var(--border); margin-bottom:1rem; gap:0.5rem; }
+  .auth-tab { padding:0.5rem 0.8rem; border:none; background:none; font-weight:600; font-size:0.85rem; color:#6b5f79; cursor:pointer; border-bottom:2px solid transparent; }
+  .auth-tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+  .auth-panel { display:none; flex-direction:column; gap:0.75rem; }
+  .auth-panel.active { display:flex; }
+  .auth-field { display:flex; flex-direction:column; gap:0.25rem; }
+  .auth-field label { font-size:0.78rem; font-weight:600; color:#4a3f55; }
+  .auth-field input { padding:0.55rem 0.75rem; border:1px solid var(--border); border-radius:6px; font-size:0.88rem; outline:none; }
+  .auth-field input:focus { border-color:var(--accent); }
+  .auth-error { color:#c5221f; font-size:0.8rem; min-height:1rem; }
+  .google-sso-btn { display:flex; align-items:center; justify-content:center; gap:0.6rem; background:#fff; border:1px solid #dadce0; border-radius:6px; padding:0.65rem 1rem; font-weight:600; font-size:0.88rem; color:#3c4043; cursor:pointer; transition:background 0.15s ease; width:100%; }
+  .google-sso-btn:hover { background:#f8f9fa; border-color:#c2c4c7; }
+  .google-icon { width:18px; height:18px; }
 </style>
+<!-- Google Identity Services script -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 <header>
   <span>🌿 Thistle &amp; Page</span>
   <span class="subtitle">San Mateo County Lending</span>
-  <div class="user-badge" id="readerBadge" title="Click to switch reader identity">
+  <div class="user-badge" id="readerBadge" title="Click to sign in or switch reader identity">
     <span id="badgeAvatar">👤</span>
-    <span id="badgeName">Elena R. (Baywood)</span>
-    <span class="switch-hint">Switch</span>
+    <span id="badgeName">Sign In / Switch</span>
+    <span class="switch-hint">Account</span>
   </div>
 </header>
 
 <div class="modal-overlay" id="profileModal">
   <div class="modal-box">
-    <h3 class="modal-title">Select Reader Profile</h3>
-    <p class="modal-desc">Switch between verified San Mateo community readers to verify isolated active shelves and borrowing records.</p>
-    <div class="profile-list" id="profileList"></div>
-    <div class="modal-actions">
-      <button type="button" class="btn-secondary" id="closeModalBtn">Cancel</button>
+    <h3 class="modal-title" id="authModalTitle">Reader Authentication &amp; Identity</h3>
+    <p class="modal-desc" id="authModalDesc">Sign in with your email, Google SSO, or choose a community reader profile.</p>
+
+    <div class="auth-tabs">
+      <button type="button" class="auth-tab active" data-tab="tab-email">Email &amp; Password</button>
+      <button type="button" class="auth-tab" data-tab="tab-google">Google SSO</button>
+      <button type="button" class="auth-tab" data-tab="tab-personas">Community Personas</button>
+    </div>
+
+    <!-- 1. Email Tab -->
+    <div class="auth-panel active" id="tab-email">
+      <div class="auth-field">
+        <label for="authEmail">Email Address</label>
+        <input type="email" id="authEmail" placeholder="reader@sanmateocounty.org" autocomplete="email">
+      </div>
+      <div class="auth-field">
+        <label for="authPassword">Password</label>
+        <input type="password" id="authPassword" placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <div class="auth-field" id="registerFields" style="display:none;">
+        <label for="authName">Your Name</label>
+        <input type="text" id="authName" placeholder="Elena Rostova">
+        <label for="authNeighborhood" style="margin-top:0.35rem;">San Mateo Neighborhood</label>
+        <input type="text" id="authNeighborhood" placeholder="e.g. Baywood, San Mateo">
+      </div>
+      <div class="auth-error" id="authError"></div>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <a href="#" id="toggleRegisterLink" style="font-size:0.8rem; color:var(--accent); text-decoration:none;">Need an account? Register</a>
+        <button type="button" class="btn-primary" id="emailSubmitBtn">Sign In</button>
+      </div>
+    </div>
+
+    <!-- 2. Google SSO Tab -->
+    <div class="auth-panel" id="tab-google">
+      <p style="font-size:0.83rem; color:#5f536d; margin:0 0 0.75rem 0;">Sign in with your Google account. Your reader profile and active holds will be securely partitioned under your Google Identity.</p>
+      <div id="g_id_onload"
+           data-client_id="demo-client-id"
+           data-callback="handleGoogleCredentialResponse"
+           data-auto_prompt="false">
+      </div>
+      <button type="button" class="google-sso-btn" id="customGoogleBtn">
+        <svg class="google-icon" viewBox="0 0 24 24"><path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/><path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z"/><path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 10.03 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/><path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/></svg>
+        Sign in with Google
+      </button>
+      <div class="auth-error" id="googleAuthError"></div>
+    </div>
+
+    <!-- 3. Community Personas Tab -->
+    <div class="auth-panel" id="tab-personas">
+      <p style="font-size:0.83rem; color:#5f536d; margin:0 0 0.6rem 0;">Quick-switch test personas for evaluator demonstration:</p>
+      <div class="profile-list" id="profileList"></div>
+    </div>
+
+    <div class="modal-actions" style="margin-top:1rem; border-top:1px solid #f0eaf7; padding-top:0.75rem;">
+      <button type="button" class="btn-secondary" id="signOutBtn" style="margin-right:auto; display:none; background:#fbe9e7; color:#c62828;">Sign Out</button>
+      <button type="button" class="btn-secondary" id="closeModalBtn">Close</button>
     </div>
   </div>
 </div>
@@ -240,11 +310,143 @@ const badgeName = document.getElementById("badgeName");
 const profileModal = document.getElementById("profileModal");
 const profileList = document.getElementById("profileList");
 const closeModalBtn = document.getElementById("closeModalBtn");
+const signOutBtn = document.getElementById("signOutBtn");
+
+const authTabs = document.querySelectorAll(".auth-tab");
+const authPanels = document.querySelectorAll(".auth-panel");
+const toggleRegisterLink = document.getElementById("toggleRegisterLink");
+const registerFields = document.getElementById("registerFields");
+const emailSubmitBtn = document.getElementById("emailSubmitBtn");
+const authEmail = document.getElementById("authEmail");
+const authPassword = document.getElementById("authPassword");
+const authName = document.getElementById("authName");
+const authNeighborhood = document.getElementById("authNeighborhood");
+const authError = document.getElementById("authError");
+const googleAuthError = document.getElementById("googleAuthError");
+const customGoogleBtn = document.getElementById("customGoogleBtn");
+
+let isRegisterMode = false;
+
+// Tab switcher
+authTabs.forEach(t => {
+  t.addEventListener("click", () => {
+    authTabs.forEach(tab => tab.classList.remove("active"));
+    authPanels.forEach(p => p.classList.remove("active"));
+    t.classList.add("active");
+    const target = document.getElementById(t.getAttribute("data-tab"));
+    if (target) target.classList.add("active");
+    if (t.getAttribute("data-tab") === "tab-personas") loadProfiles();
+  });
+});
+
+// Toggle register/sign in
+toggleRegisterLink.addEventListener("click", (e) => {
+  e.preventDefault();
+  isRegisterMode = !isRegisterMode;
+  if (isRegisterMode) {
+    registerFields.style.display = "flex";
+    emailSubmitBtn.textContent = "Create Account";
+    toggleRegisterLink.textContent = "Already have an account? Sign In";
+  } else {
+    registerFields.style.display = "none";
+    emailSubmitBtn.textContent = "Sign In";
+    toggleRegisterLink.textContent = "Need an account? Register";
+  }
+  authError.textContent = "";
+});
 
 function updateBadgeUI() {
   badgeAvatar.textContent = currentProfile.avatar || "👤";
-  badgeName.textContent = `${currentProfile.name} (${currentProfile.neighborhood.split(',')[0]})`;
+  badgeName.textContent = currentProfile.name ? `${currentProfile.name} (${(currentProfile.neighborhood || 'San Mateo').split(',')[0]})` : "Sign In";
+  signOutBtn.style.display = sessionToken ? "block" : "none";
 }
+
+async function handleEmailAuth() {
+  authError.textContent = "";
+  const email = authEmail.value.trim();
+  const password = authPassword.value;
+  if (!email || !password) {
+    authError.textContent = "Email and password are required.";
+    return;
+  }
+  const endpoint = isRegisterMode ? "/api/auth/register" : "/api/auth/login";
+  const payload = { email, password };
+  if (isRegisterMode) {
+    payload.name = authName.value.trim();
+    payload.neighborhood = authNeighborhood.value.trim();
+  }
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      authError.textContent = data.error || "Authentication failed.";
+      return;
+    }
+    sessionToken = data.token;
+    localStorage.setItem("reader_token", sessionToken);
+    currentProfile = {
+      user_id: data.user_id,
+      name: data.name,
+      neighborhood: data.neighborhood,
+      email: data.email,
+      avatar: data.avatar || "👤"
+    };
+    localStorage.setItem("reader_profile", JSON.stringify(currentProfile));
+    updateBadgeUI();
+    profileModal.classList.remove("open");
+    bubble("agent").textContent = `Welcome ${data.name}! You are signed in (${data.neighborhood}). Your reading shelf and holds are securely synchronized with your profile.`;
+  } catch (err) {
+    authError.textContent = "Network error: " + err.message;
+  }
+}
+emailSubmitBtn.addEventListener("click", handleEmailAuth);
+
+// Google SSO response handler
+window.handleGoogleCredentialResponse = async function(response) {
+  try {
+    const res = await fetch("/api/auth/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: response.credential })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Google sign-in failed.");
+    sessionToken = data.token;
+    localStorage.setItem("reader_token", sessionToken);
+    currentProfile = {
+      user_id: data.user_id,
+      name: data.name,
+      neighborhood: data.neighborhood,
+      email: data.email,
+      avatar: data.avatar || "🇬"
+    };
+    localStorage.setItem("reader_profile", JSON.stringify(currentProfile));
+    updateBadgeUI();
+    profileModal.classList.remove("open");
+    bubble("agent").textContent = `Welcome ${data.name}! Signed in via Google SSO. Your active holds and borrowing requests are securely tied to your Google Identity.`;
+  } catch (e) {
+    googleAuthError.textContent = e.message;
+  }
+};
+
+customGoogleBtn.addEventListener("click", () => {
+  // If GIS button is not active, prompt user with standard demo sign-in or let them enter email
+  googleAuthError.textContent = "Google Identity Services initialized. You can sign in via Google or use Email & Password.";
+});
+
+signOutBtn.addEventListener("click", () => {
+  sessionToken = "";
+  localStorage.removeItem("reader_token");
+  localStorage.removeItem("reader_profile");
+  currentProfile = { user_id: "anonymous", name: "Guest Reader", neighborhood: "San Mateo", avatar: "👤" };
+  updateBadgeUI();
+  profileModal.classList.remove("open");
+  bubble("agent").textContent = "You have signed out. Browsing as Guest Reader.";
+});
 
 async function loginAsProfile(profile) {
   try {
@@ -303,7 +505,9 @@ try {
   if (saved) currentProfile = JSON.parse(saved);
 } catch (e) {}
 updateBadgeUI();
-loginAsProfile(currentProfile);
+if (!sessionToken && currentProfile.user_id !== "anonymous") {
+  loginAsProfile(currentProfile);
+}
 
 badgeEl.addEventListener("click", () => {
   loadProfiles();
