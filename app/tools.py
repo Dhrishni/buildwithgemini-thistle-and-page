@@ -37,10 +37,17 @@ from app.data_store import (
 from app.firestore_service import (
     add_community_shelf_item,
     add_item_to_user_shelf_in_db,
+    confirm_p2p_pickup,
+    create_p2p_loan,
     get_community_item,
+    get_p2p_loan,
     get_user_active_shelf_from_db,
+    get_user_loans,
     list_community_shelf_items,
+    remove_item_from_user_shelf,
+    return_p2p_loan,
     update_item_borrow_status,
+    update_user_shelf_state,
 )
 from app.semantic_service import semantic_rank_items
 
@@ -269,63 +276,76 @@ def request_neighbor_borrow(
     duration_days: int = 14,
     meetup_preference: str = "porch_pickup",
     user_id: str = "default_reader",
-    borrower_name: str = "Neighbor Reader",
+    borrower_name: str = "",
 ) -> Dict[str, Any]:
-    """Sends a request to borrow a physical book or reading gear from a neighbor.
+    """Initiates an escrow borrow request for a physical book, reader, or gear from a verified neighbor.
+    Generates a secure 4-digit pickup code for the physical handoff.
 
     Args:
-        item_id: ID of the community item (e.g., 'item_1', 'item_2', 'item_3', 'item_4').
+        item_id: ID of the community item (e.g., 'item_1', 'item_2', 'item_3', 'item_5').
         duration_days: Requested loan duration in days (default 14 days).
         meetup_preference: Preferred handoff method ('porch_pickup', 'library_meetup', 'coffee_shop').
-        user_id: Unique identifier of the borrowing reader (e.g., 'elena_baywood', 'marcus_hillsdale').
-        borrower_name: Moniker/name of the borrowing reader.
+        user_id: Unique identifier of the borrowing reader (e.g., 'elena_baywood', 'carlos_reader').
+        borrower_name: Moniker or name of the borrowing reader.
 
     Returns:
-        Confirmation and instructions for coordinating with the neighbor.
+        Escrow loan status, 4-digit pickup code, and meetup coordination instructions.
     """
-    due_date = (datetime.now() + timedelta(days=duration_days)).strftime("%Y-%m-%d")
-
-    # Try Firestore first
+    # 1. Look up item in Firestore or in-memory
     item = None
     try:
         item = get_community_item(item_id)
     except Exception:
         pass
 
-    if item:
-        if item.get("status") != "available":
-            return {"error": f"Item '{item.get('title')}' is currently marked as {item.get('status')}."}
-
-        # Update in Firestore
-        try:
-            update_item_borrow_status(item_id, borrowed_by=borrower_name or user_id, due_date=due_date)
-        except Exception:
-            pass
-
-        title = item.get("title")
-        owner_name = item.get("owner_name")
-        owner_neighborhood = item.get("owner_neighborhood")
-        item_format = item.get("format")
-    else:
-        # Fallback to in-memory
+    if not item:
         mem_item = SEED_COMMUNITY_ITEMS.get(item_id)
-        if not mem_item:
-            return {"error": f"Item '{item_id}' not found in neighborhood catalog."}
-        if mem_item.status != "available":
-            return {"error": f"Item '{mem_item.title}' is currently marked as {mem_item.status}."}
-        mem_item.status = "borrowed"
-        mem_item.due_date = due_date
-        mem_item.borrowed_by = borrower_name or user_id
+        if mem_item:
+            item = {
+                "item_id": mem_item.item_id,
+                "title": mem_item.title,
+                "owner_name": mem_item.owner_name,
+                "owner_neighborhood": mem_item.owner_neighborhood,
+                "format": mem_item.format,
+                "status": mem_item.status,
+            }
 
-        title = mem_item.title
-        owner_name = mem_item.owner_name
-        owner_neighborhood = mem_item.owner_neighborhood
-        item_format = mem_item.format
+    if not item:
+        return {"error": f"Item '{item_id}' not found in neighborhood catalog."}
+    if item.get("status") != "available":
+        return {"error": f"Item '{item.get('title')}' is currently marked as {item.get('status')}."}
 
-    shelf_id = f"shelf_p2p_{int(datetime.now(timezone.utc).timestamp())}"
-    details_str = f"Meetup: {meetup_preference}. Contact neighbor {owner_name} to coordinate."
+    title = item.get("title")
+    owner_name = item.get("owner_name")
+    owner_neighborhood = item.get("owner_neighborhood")
+    item_format = item.get("format", "physical")
 
-    # Persist directly into Firestore user shelf for the specific user
+    # Generate random 4-digit pickup code
+    import secrets
+    pickup_code = f"{secrets.randbelow(9000) + 1000}"
+    loan_id = f"loan_{secrets.token_hex(4)}"
+    shelf_id = f"shelf_p2p_{loan_id}"
+
+    # 2. Persist to Firestore p2p_loans collection
+    try:
+        create_p2p_loan(
+            loan_id=loan_id,
+            item_id=item_id,
+            title=title,
+            lender_id=f"lender_{owner_name.lower().replace(' ', '_')}",
+            lender_name=owner_name,
+            lender_neighborhood=owner_neighborhood,
+            borrower_id=user_id,
+            borrower_name=borrower_name or user_id,
+            duration_days=duration_days,
+            meetup_preference=meetup_preference,
+            pickup_code=pickup_code,
+        )
+    except Exception as e:
+        print(f"[Warning] Failed to persist P2P loan to Firestore: {e}")
+
+    # 3. Add to Borrower's Active Shelf with state='requested'
+    details_str = f"Pickup Code: [{pickup_code}]. Handoff: {meetup_preference}. Contact {owner_name} to collect."
     try:
         add_item_to_user_shelf_in_db(
             user_id=user_id,
@@ -334,34 +354,94 @@ def request_neighbor_borrow(
             source_type="neighbor_p2p",
             source_name=f"{owner_name} ({owner_neighborhood})",
             item_format=item_format,
-            state="borrowed",
-            due_or_available_date=due_date,
+            state="requested",
+            due_or_available_date="Pending pickup confirmation",
             details=details_str,
         )
     except Exception as e:
-        print(f"[Warning] Failed to persist active shelf item to Firestore: {e}")
-
-    ACTIVE_SHELF.append(ActiveShelfItem(
-        shelf_id=shelf_id,
-        user_id=user_id,
-        title=title,
-        source_type="neighbor_p2p",
-        source_name=f"{owner_name} ({owner_neighborhood})",
-        format=item_format,
-        state="borrowed",
-        due_or_available_date=due_date,
-        details=details_str,
-    ))
+        print(f"[Warning] Failed to persist shelf item to Firestore: {e}")
 
     return {
         "success": True,
+        "loan_id": loan_id,
         "title": title,
         "owner": owner_name,
         "neighborhood": owner_neighborhood,
-        "due_date": due_date,
         "meetup_preference": meetup_preference,
-        "message": f"Successfully requested '{title}' from {owner_name} in {owner_neighborhood}! Added to your active shelf (due {due_date})."
+        "pickup_code": pickup_code,
+        "status": "requested",
+        "action_instruction": f"Meet {owner_name} or visit porch drop-box. Once you collect the item, provide pickup code '{pickup_code}' to confirm receipt.",
+        "message": (
+            f"Escrow borrow request created for '{title}' from {owner_name} ({owner_neighborhood})!\n"
+            f"🔑 4-Digit Pickup Code: {pickup_code}\n"
+            f"📦 Handoff: {meetup_preference}. When you pick up the book, tell the assistant: 'Confirm pickup for {title} with code {pickup_code}'."
+        ),
     }
+
+
+def confirm_pickup_handshake(
+    loan_id: str,
+    pickup_code: str,
+    user_id: str = "default_reader",
+) -> Dict[str, Any]:
+    """Completes the physical handoff handshake for a P2P loan using the 4-digit verification code.
+    Transitions the loan from 'requested' to 'borrowed' and activates the loan schedule.
+
+    Args:
+        loan_id: The ID of the P2P loan (e.g. 'loan_a1b2c3d4').
+        pickup_code: The 4-digit code generated during the initial borrow request (e.g. '4819').
+        user_id: Unique identifier of the borrower confirming receipt.
+
+    Returns:
+        Handshake confirmation result with calculated due date.
+    """
+    try:
+        res = confirm_p2p_pickup(loan_id=loan_id, pickup_code=pickup_code, user_id=user_id)
+        return res
+    except Exception as e:
+        return {"success": False, "error": f"Failed to confirm pickup: {str(e)}"}
+
+
+def return_neighbor_book(
+    loan_id: str,
+    user_id: str = "default_reader",
+) -> Dict[str, Any]:
+    """Closes an active P2P loan, marks it as 'returned', and restores the book/gear to 'available' in the community catalog.
+
+    Args:
+        loan_id: The ID of the active P2P loan to return.
+        user_id: Unique identifier of the reader returning the item.
+
+    Returns:
+        Return confirmation and receipt details.
+    """
+    try:
+        res = return_p2p_loan(loan_id=loan_id, user_id=user_id)
+        return res
+    except Exception as e:
+        return {"success": False, "error": f"Failed to record book return: {str(e)}"}
+
+
+def get_my_p2p_loans(user_id: str = "default_reader") -> Dict[str, Any]:
+    """Retrieves all active and historical P2P community loan handshakes (as borrower or lender).
+
+    Args:
+        user_id: Unique identifier of the reader.
+
+    Returns:
+        A list of escrow loan records with statuses (requested, borrowed, returned).
+    """
+    try:
+        loans = get_user_loans(user_id=user_id)
+        return {
+            "user_id": user_id,
+            "total_loans": len(loans),
+            "loans": loans,
+            "summary": f"Found {len(loans)} community loan handshake(s) for user {user_id}.",
+        }
+    except Exception as e:
+        return {"user_id": user_id, "loans": [], "error": str(e)}
+
 
 
 def list_item_for_lending(

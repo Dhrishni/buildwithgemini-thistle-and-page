@@ -30,12 +30,15 @@ from app.a2ui_utils import a2ui_callback
 from app.tools import (
     calculate_neighborhood_distance,
     calculate_reading_pace,
+    confirm_pickup_handshake,
     generate_item_image,
     get_my_active_shelf,
+    get_my_p2p_loans,
     list_item_for_lending,
     lookup_book_metadata,
     optimize_library_holds,
     request_neighbor_borrow,
+    return_neighbor_book,
     search_catalog_and_neighborhood,
     search_open_library,
 )
@@ -67,7 +70,14 @@ Core Principles:
   When the user mentions or updates any of these details, acknowledge and remember them. On subsequent turns or sessions, automatically use their transit radius and neighborhood to filter P2P recommendations and prioritize branches where they have active cards without re-asking.
 - Authenticated Reader Context:
   When a user prompt includes an `[Authenticated Reader: Name (id: user_id, neighborhood: neighborhood)]` header, always address the reader warmly by their authenticated name and neighborhood.
-  Whenever calling `get_my_active_shelf` or `request_neighbor_borrow`, pass the `user_id` and reader name into the tool so their active shelf and borrow requests are strictly scoped to their personal account in Firestore.
+  Whenever calling `get_my_active_shelf`, `request_neighbor_borrow`, `confirm_pickup_handshake`, `return_neighbor_book`, or `get_my_p2p_loans`, pass the `user_id` and reader name into the tool so their active shelf and borrow requests are strictly scoped to their personal account in Firestore.
+- P2P Loaning Escrow & Physical Handshake State Machine:
+  When a reader borrows a book or gear from a neighbor via `request_neighbor_borrow`:
+  1. The request enters escrow state `requested` and issues a unique 4-digit pickup code (e.g. 4819).
+  2. Clearly present the 4-digit pickup code to the reader and instruct them to give or verify this code when collecting the book from the porch or meeting the neighbor.
+  3. Once the physical handoff occurs, the borrower confirms pickup using `confirm_pickup_handshake(loan_id, pickup_code, user_id)` (or "Confirm pickup for loan ... with code ..."). This activates the loan schedule and marks it `borrowed`.
+  4. When the reader finishes reading, they can return the item using `return_neighbor_book(loan_id, user_id)`, which returns the item to `available` on the community shelf.
+  5. Readers can review all outgoing and incoming loan handshakes anytime via `get_my_p2p_loans`.
 - Reading Pace & Feasibility Pacing:
   When inspecting borrowed items or planning a read, proactively calculate whether the reader can comfortably finish before the due date (using calculate_reading_pace or sandbox code). If pacing looks tight, offer helpful advice (e.g. daily page goal or audio speedup).
 - Visual Artwork & Illustrated Bookmarks:
@@ -133,6 +143,9 @@ root_agent = Agent(
         search_catalog_and_neighborhood,
         optimize_library_holds,
         request_neighbor_borrow,
+        confirm_pickup_handshake,
+        return_neighbor_book,
+        get_my_p2p_loans,
         list_item_for_lending,
         get_my_active_shelf,
         calculate_reading_pace,

@@ -36,6 +36,7 @@ flowchart TD
         FIRESTORE_USERS[("Cloud Firestore: users\n(Durable user directory)")]
         FIRESTORE_SHELVES[("Cloud Firestore: user_active_shelves\n(Per-user loans & holds)")]
         FIRESTORE_COMMUNITY[("Cloud Firestore: community_shelf\n(Neighborhood catalog)")]
+        FIRESTORE_LOANS[("Cloud Firestore: p2p_loans\n(Escrow Handshake & Code Verification)")]
         VERTEX_EMBED["Vertex AI Embeddings\n(text-embedding-005)"]
         VERTEX_IMAGE["Imagen 3 / Flash-Lite-Image\n(gemini-3.1-flash-lite-image)"]
         GCS_BUCKET[("Cloud Storage Public Assets\ngs://thistle-and-page-assets-9683cc")]
@@ -56,6 +57,7 @@ flowchart TD
 
     ROOT_AGENT -->|Persist loans, holds| FIRESTORE_SHELVES
     ROOT_AGENT -->|Query book inventory| FIRESTORE_COMMUNITY
+    ROOT_AGENT -->|P2P Handshake & Escrow| FIRESTORE_LOANS
     ROOT_AGENT -->|Vibe semantic search| VERTEX_EMBED
     ROOT_AGENT -->|Bookmark & cover art| VERTEX_IMAGE
     VERTEX_IMAGE -->|Public media URLs| GCS_BUCKET
@@ -68,7 +70,38 @@ flowchart TD
 
 ---
 
-## 2. Core Subsystems & Components
+## 2. Peer-to-Peer Loaning Escrow & Handshake State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Requested: request_neighbor_borrow(item_id)
+    note right of Requested
+        - Generates secure 4-digit pickup code (e.g. 4819)
+        - Records lender, borrower, meetup method
+        - Added to borrower shelf as 'requested'
+    end note
+
+    Requested --> Borrowed: confirm_pickup_handshake(loan_id, pickup_code)
+    note right of Borrowed
+        - Borrower provides 4-digit code upon meetup
+        - Verified against stored code in p2p_loans
+        - Due date starts (e.g. 14 days)
+        - Community item marked as 'borrowed'
+    end note
+
+    Borrowed --> Returned: return_neighbor_book(loan_id)
+    note right of Returned
+        - Physical item returned to neighbor
+        - Loan marked 'returned'
+        - Community item restored to 'available'
+    end note
+
+    Returned --> [*]
+```
+
+---
+
+## 3. Core Subsystems & Components
 
 ### A. Client & User Identity Tier (Browser / Frontend)
 - **Header Reader Badge**: Displays active user profile (`Maya H. (Hillsdale)`, `Elena R. (Baywood)`), or prompts Sign In.
@@ -91,17 +124,21 @@ flowchart TD
 - **Core LLM**: `gemini-2.5-flash` orchestrated via Google ADK (Agent Development Kit).
 - **Tools**:
   1. `get_my_active_shelf`: Reads user-specific borrowed books and holds from Cloud Firestore scoped strictly to `user_id`.
-  2. `request_neighbor_borrow`: Creates a peer loan between borrower and lender, recording due dates in Firestore.
-  3. `search_catalog_and_neighborhood`: Multi-modal search matching exact titles and semantic reading vibes with distance filtering.
-  4. `generate_item_image`: Generates custom bookmark artwork and cover imagery using `gemini-3.1-flash-lite-image` and uploads directly to public GCS.
-  5. `calculate_reading_pace`: Assesses due-date feasibility and reading pace.
-  6. `AgentEngineSandboxCodeExecutor`: Secure cloud execution sandbox for complex queue simulations and date calculations.
+  2. `request_neighbor_borrow`: Creates a peer loan in escrow state `requested` with a 4-digit pickup code.
+  3. `confirm_pickup_handshake`: Verifies the 4-digit code and starts the active loan period.
+  4. `return_neighbor_book`: Closes the loan and restores the item to `available` in the catalog.
+  5. `get_my_p2p_loans`: Summarizes borrower and lender active/historical handshakes.
+  6. `search_catalog_and_neighborhood`: Multi-modal search matching exact titles and semantic reading vibes across 20+ titles with distance filtering.
+  7. `generate_item_image`: Generates custom bookmark artwork and cover imagery using `gemini-3.1-flash-lite-image` and uploads directly to public GCS.
+  8. `calculate_reading_pace`: Assesses due-date feasibility and reading pace.
+  9. `AgentEngineSandboxCodeExecutor`: Secure cloud execution sandbox for complex queue simulations and date calculations.
 
 ### D. Data & Storage Tier
 1. **Google Cloud Firestore**:
    - `users`: Production user directory storing emails, hashed credentials, Google identity IDs, names, neighborhoods, and library card numbers.
    - `user_active_shelves`: Per-user active loans, library holds, due dates, and handoff instructions.
    - `community_shelf`: Catalog of physical books and reading accessories offered by neighbors in San Mateo County.
+   - `p2p_loans`: Escrow records storing 4-digit pickup codes, lender/borrower IDs, duration, and lifecycle states (`requested`, `borrowed`, `returned`).
 2. **Vertex AI Embeddings (`text-embedding-005`)**:
    - 768-dimensional dense vector embeddings providing cosine-similarity semantic search across books and mood vibes.
 3. **Google Cloud Storage (GCS)**:
@@ -111,8 +148,10 @@ flowchart TD
 
 ---
 
-## 3. Data Flow & Security Model
+## 4. Data Flow & Security Model
 
 1. **Zero GCP Credentials in Browser**: The browser speaks standard HTTPS/JSON with bearer tokens only to the Cloud Run proxy.
 2. **Application Default Credentials (ADC)**: The Cloud Run proxy authenticates to Vertex AI Agent Platform using service account tokens refreshed per request.
 3. **Session & Shelf Scoping**: No user can mutate or inspect another reader's active holds or borrowing schedule without explicit user ID matching in Firestore.
+4. **Cryptographic Handshake Codes**: 4-digit escrow codes guarantee physical transfer before starting due date tracking.
+
